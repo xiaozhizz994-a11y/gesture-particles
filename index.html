@@ -46,13 +46,6 @@
     let dynamicFaceCoords = [];
     let faceLandmarker;
 
-    // 获取模型绝对路径，带上随机后缀彻底解决缓存
-    const getModelUrl = () => {
-        const baseUrl = window.location.href.split('?')[0].split('#')[0];
-        const dir = baseUrl.substring(0, baseUrl.lastIndexOf("/") + 1);
-        return `${dir}face_landmarker.task?v=${Date.now()}`;
-    };
-
     function resize() {
         width = canvas.width = window.innerWidth;
         height = canvas.height = window.innerHeight;
@@ -67,39 +60,49 @@
     }
     window.addEventListener('resize', resize);
 
-    /** --- 2. 核心初始化 --- **/
+    /** --- 2. 核心初始化（整合调试逻辑） --- **/
     async function initFaceLandmarker() {
-        // 确保 window.mediapipe 已被脚本加载
-        if (!window.mediapipe || !window.mediapipe.tasksVision) {
-            throw new Error("MediaPipe 库尚未加载完成，请刷新页面重试。");
-        }
+        try {
+            console.log("开始加载 FilesetResolver...");
+            // 确保 window.mediapipe 已被脚本加载
+            if (!window.mediapipe || !window.mediapipe.tasksVision) {
+                throw new Error("MediaPipe 库尚未加载完成，请检查网络或 CDN 链接。");
+            }
 
-        const vision = await window.mediapipe.tasksVision.FilesetResolver.forVisionTasks(
-            "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
-        );
-        
-        const modelPath = getModelUrl();
-        console.log("模型加载路径:", modelPath);
+            const vision = await window.mediapipe.tasksVision.FilesetResolver.forVisionTasks(
+                "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+            );
+            
+            // 强制绝对路径并加版本号规避缓存
+            const modelUrl = new URL("face_landmarker.task", window.location.href).href + `?v=${Date.now()}`;
+            console.log("准备加载模型:", modelUrl);
 
-        faceLandmarker = await window.mediapipe.tasksVision.FaceLandmarker.createFromOptions(vision, {
-            baseOptions: {
-                modelAssetPath: modelPath, 
-                delegate: "GPU"
-            },
-            runningMode: "VIDEO",
-            numFaces: 1
-        });
-
-        // 二次确认关键方法是否存在
-        if (!faceLandmarker || typeof faceLandmarker.detectForVideo !== 'function') {
-            throw new Error("模型初始化异常：方法未绑定。请确认 face_landmarker.task 文件名完全正确且未损坏。");
+            faceLandmarker = await window.mediapipe.tasksVision.FaceLandmarker.createFromOptions(vision, {
+                baseOptions: {
+                    modelAssetPath: modelUrl,
+                    delegate: "GPU"
+                },
+                runningMode: "VIDEO",
+                numFaces: 1
+            });
+            
+            // 验证关键方法
+            if (faceLandmarker && typeof faceLandmarker.detectForVideo === 'function') {
+                console.log("✅ 识别引擎初始化成功！");
+            } else {
+                throw new Error("引擎已创建但 detectForVideo 方法丢失。请确认 face_landmarker.task 文件没有被系统自动重命名（如多了个 .txt）。");
+            }
+        } catch (err) {
+            alert("🚨 初始化崩溃: " + err.message);
+            console.error(err);
+            throw err; // 抛出错误以便 startBtn 捕获
         }
     }
 
     async function initAudio() {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         const res = await fetch('music.MP3');
-        if (!res.ok) throw new Error("音频资源加载失败，请检查 music.MP3 是否在根目录。");
+        if (!res.ok) throw new Error("音频文件 music.MP3 加载失败。");
         const buffer = await audioCtx.decodeAudioData(await res.arrayBuffer());
         bgmSource = audioCtx.createBufferSource();
         bgmSource.buffer = buffer;
@@ -116,7 +119,7 @@
         if (analyser) {
             analyser.getByteFrequencyData(dataArray);
             let sum = 0;
-            for (let i = 0; i < 128; i++) sum += dataArray[i]; // 取低频部分更有节奏感
+            for (let i = 0; i < 128; i++) sum += dataArray[i];
             audioBoost = sum / 128 / 255;
         }
         
@@ -157,15 +160,13 @@
 
     /** --- 4. 启动按钮逻辑 --- **/
     startBtn.onclick = async () => {
-        startBtn.innerText = "系统唤醒中...";
+        startBtn.innerText = "资源启动中...";
         startBtn.style.pointerEvents = "none";
         
         try {
-            // 先尝试初始化音频和视觉
             await initAudio();
             await initFaceLandmarker();
             
-            // 初始化相机
             const camera = new Camera(videoElement, {
                 onFrame: async () => {},
                 width: 640, height: 480
@@ -175,9 +176,8 @@
             startBtn.style.display = 'none';
             predict();
         } catch (e) {
-            console.error(e);
-            alert(`初始化失败：\n${e.message}\n\n排查建议：\n1. 检查 GitHub 上文件名是否为 face_landmarker.task (无后缀)\n2. 确保在 Safari 打开而非微信内。`);
-            startBtn.innerText = "重新尝试";
+            // alert 已在 initFaceLandmarker 中处理
+            startBtn.innerText = "点击重试";
             startBtn.style.pointerEvents = "all";
         }
     };
