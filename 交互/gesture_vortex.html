@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+    <title>手势粒子交互 - 全量版</title>
+
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+    <style>
+
+        body { margin: 0; overflow: hidden; background: #000; touch-action: none; font-family: "PingFang SC", "Microsoft YaHei", sans-serif; }
+
+        canvas { display: block; }
+
+        #input_video { position: fixed; top: 0; left: 0; width: 1px; height: 1px; opacity: 0; }
+
+       
+
+        /* 启动按钮样式 */
+
+        #start_btn {
+
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+
+            padding: 18px 45px; font-size: 18px; background: #0ff; border: none;
+
+            border-radius: 50px; color: #000; font-weight: bold; z-index: 10001;
+
+            cursor: pointer; box-shadow: 0 0 30px rgba(0, 255, 255, 0.5);
+
+            transition: all 0.3s;
+
+        }
+
+
+
+        /* 底部文字样式 */
+
+        #footer_text {
+
+            position: absolute;
+
+            bottom: 30px;
+
+            left: 50%;
+
+            transform: translateX(-50%);
+
+            color: #ffffff;
+
+            font-size: 24px;
+
+            font-weight: 900; /* 极粗黑体 */
+
+            letter-spacing: 4px;
+
+            pointer-events: none; /* 不干扰触摸交互 */
+
+            text-align: center;
+
+            z-index: 100;
+
+            animation: breathe 3s ease-in-out infinite;
+
+        }
+
+
+
+        /* 呼吸发光动画 */
+
+        @keyframes breathe {
+
+            0%, 100% {
+
+                opacity: 0.6;
+
+                text-shadow: 0 0 5px rgba(255, 255, 255, 0.3);
+
+            }
+
+            50% {
+
+                opacity: 1;
+
+                text-shadow: 0 0 20px rgba(255, 255, 255, 0.8), 0 0 30px rgba(255, 255, 255, 0.4);
+
+            }
+
+        }
+
+    </style>
+
+</head>
+
+<body>
+
+
+
+<video id="input_video" playsinline webkit-playsinline muted></video>
+
+<canvas id="canvas"></canvas>
+
+<button id="start_btn">开启交互体验</button>
+
+
+
+<!-- 底部添加文字 -->
+
+<div id="footer_text">都成视觉</div>
+
+
+
+<script>
+
+    /** --- 1. 音频引擎 --- **/
+
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+    let analyser, dataArray, bgmSource;
+
+    let audioBoost = 0;
+
+    const sfxBuffers = [];
+
+
+
+    async function loadAudioResources() {
+
+        try {
+
+            const bgmRes = await fetch('music.MP3');
+
+            const bgmBuffer = await audioCtx.decodeAudioData(await bgmRes.arrayBuffer());
+
+            bgmSource = audioCtx.createBufferSource();
+
+            bgmSource.buffer = bgmBuffer;
+
+            bgmSource.loop = true;
+
+            analyser = audioCtx.createAnalyser();
+
+            analyser.fftSize = 256;
+
+            dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+            bgmSource.connect(analyser);
+
+            analyser.connect(audioCtx.destination);
+
+            bgmSource.start(0);
+
+        } catch (e) { console.error("BGM加载失败", e); }
+
+
+
+        for (let i = 0; i <= 4; i++) {
+
+            try {
+
+                const sfxRes = await fetch(`${i}.wav`);
+
+                const buffer = await audioCtx.decodeAudioData(await sfxRes.arrayBuffer());
+
+                sfxBuffers.push(buffer);
+
+            } catch (e) { console.warn(`音效 ${i}.wav 加载失败`); }
+
+        }
+
+    }
+
+
+
+    function playRandomSFX() {
+
+        if (sfxBuffers.length === 0) return;
+
+        const source = audioCtx.createBufferSource();
+
+        source.buffer = sfxBuffers[Math.floor(Math.random() * sfxBuffers.length)];
+
+        source.connect(analyser);
+
+        source.connect(audioCtx.destination);
+
+        source.start(0);
+
+    }
+
+
+
+    function updateAudioData() {
+
+        if (!analyser) return;
+
+        analyser.getByteFrequencyData(dataArray);
+
+        let sum = 0;
+
+        for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+
+        audioBoost = sum / dataArray.length / 255;
+
+    }
+
+
+
+    /** --- 2. 视觉引擎 (全量填充版) --- **/
+
+    const canvas = document.getElementById('canvas');
+
+    const ctx = canvas.getContext('2d');
+
+    const startBtn = document.getElementById('start_btn');
+
+    const videoElement = document.getElementById('input_video');
+
+
+
+    let width, height, particles = [];
+
+    const mouse = { x: -1000, y: -1000 };
+
+    let mode = 0, isPinching = false, shapeCoords = [];
+
+   
+
+    const logoImg = new Image();
+
+    logoImg.src = 'logo.png';
+
+
+
+    function resize() {
+
+        width = canvas.width = window.innerWidth;
+
+        height = canvas.height = window.innerHeight;
+
+        if (logoImg.complete) generateShapeCoords();
+
+        else logoImg.onload = generateShapeCoords;
+
+    }
+
+    window.addEventListener('resize', resize);
+
+
+
+    function generateShapeCoords() {
+
+        const offCanvas = document.createElement('canvas');
+
+        const offCtx = offCanvas.getContext('2d');
+
+        const scale = Math.min(width * 0.7 / logoImg.width, height * 0.7 / logoImg.height);
+
+        const drawW = logoImg.width * scale;
+
+        const drawH = logoImg.height * scale;
+
+       
+
+        offCanvas.width = width;
+
+        offCanvas.height = height;
+
+        offCtx.drawImage(logoImg, (width - drawW) / 2, (height - drawH) / 2, drawW, drawH);
+
+       
+
+        const imgData = offCtx.getImageData(0, 0, width, height).data;
+
+        shapeCoords = [];
+
+        const step = 3;
+
+       
+
+        for (let y = 0; y < height; y += step) {
+
+            for (let x = 0; x < width; x += step) {
+
+                const i = (y * width + x) * 4;
+
+                const r = imgData[i], g = imgData[i+1], b = imgData[i+2], a = imgData[i+3];
+
+                if (a > 50 && (r + g + b) < 500) {
+
+                    shapeCoords.push({ x, y });
+
+                }
+
+            }
+
+        }
+
+        if (shapeCoords.length === 0) shapeCoords.push({ x: width / 2, y: height / 2 });
+
+        initParticles();
+
+    }
+
+
+
+    function initParticles() {
+
+        particles = [];
+
+        for (let i = 0; i < shapeCoords.length; i++) {
+
+            particles.push(new Particle(i));
+
+        }
+
+    }
+
+
+
+    class Particle {
+
+        constructor(id) {
+
+            this.id = id;
+
+            this.x = Math.random() * width;
+
+            this.y = Math.random() * height;
+
+            this.vx = 0; this.vy = 0;
+
+            this.baseSize = Math.random() * 1.5 + 1.0;
+
+            this.color = `hsla(${Math.random() * 40 + 185}, 100%, 75%, ${Math.random() * 0.6 + 0.4})`;
+
+            this.angle = Math.random() * Math.PI * 2;
+
+            this.orbit = Math.random() * 80 + 30;
+
+        }
+
+
+
+        update() {
+
+            const speedFactor = mode === 1 ? 0.12 : (0.05 + audioBoost * 0.12);
+
+            const jitter = mode === 1 ? (audioBoost * 10) : 0;
+
+           
+
+            this.x += this.vx; this.y += this.vy;
+
+            this.vx *= 0.93; this.vy *= 0.93;
+
+
+
+            if (Math.abs(this.vx) < 0.5) {
+
+                let tx, ty;
+
+                if (mode === 0) {
+
+                    this.angle += 0.015 + audioBoost * 0.05;
+
+                    const dynamicOrbit = this.orbit * (1 + audioBoost * 2);
+
+                    tx = mouse.x + Math.cos(this.angle) * dynamicOrbit;
+
+                    ty = mouse.y + Math.sin(this.angle) * dynamicOrbit;
+
+                } else if (mode === 1) {
+
+                    const target = shapeCoords[this.id];
+
+                    tx = target.x + (Math.random() - 0.5) * jitter;
+
+                    ty = target.y + (Math.random() - 0.5) * jitter;
+
+                } else {
+
+                    tx = mouse.x + (Math.random() - 0.5) * (width * 0.4 * (1 + audioBoost));
+
+                    ty = mouse.y + (Math.random() - 0.5) * (height * 0.4 * (1 + audioBoost));
+
+                }
+
+                this.x += (tx - this.x) * speedFactor;
+
+                this.y += (ty - this.y) * speedFactor;
+
+            }
+
+        }
+
+
+
+        draw() {
+
+            ctx.fillStyle = this.color;
+
+            const s = this.baseSize * (1 + audioBoost * 2.5);
+
+            ctx.fillRect(this.x, this.y, s, s);
+
+        }
+
+    }
+
+
+
+    function animate() {
+
+        updateAudioData();
+
+        ctx.fillStyle = `rgba(0, 0, 0, ${0.16 - audioBoost * 0.08})`;
+
+        ctx.fillRect(0, 0, width, height);
+
+        particles.forEach(p => { p.update(); p.draw(); });
+
+        requestAnimationFrame(animate);
+
+    }
+
+
+
+    /** --- 3. 手势控制 --- **/
+
+    const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+
+    hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.7 });
+
+   
+
+    hands.onResults((results) => {
+
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+
+            const marks = results.multiHandLandmarks[0];
+
+            const thumb = marks[4], indexF = marks[8];
+
+            mouse.x = (1 - indexF.x) * width;
+
+            mouse.y = indexF.y * height;
+
+            const dist = Math.sqrt(Math.pow(thumb.x - indexF.x, 2) + Math.pow(thumb.y - indexF.y, 2));
+
+            if (dist < 0.05 && !isPinching) {
+
+                isPinching = true;
+
+            } else if (dist > 0.12 && isPinching) {
+
+                isPinching = false;
+
+                playRandomSFX();
+
+                particles.forEach(p => {
+
+                    const dx = p.x - mouse.x, dy = p.y - mouse.y;
+
+                    const d = Math.sqrt(dx*dx + dy*dy) || 1;
+
+                    p.vx = (dx/d) * (45 + audioBoost * 30);
+
+                    p.vy = (dy/d) * (45 + audioBoost * 30);
+
+                });
+
+                mode = (mode + 1) % 3;
+
+            }
+
+        }
+
+    });
+
+
+
+    const camera = new Camera(videoElement, {
+
+        onFrame: async () => { await hands.send({ image: videoElement }); },
+
+        width: 640, height: 480
+
+    });
+
+
+
+    resize();
+
+    animate();
+
+
+
+    startBtn.onclick = async () => {
+
+        if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+        await loadAudioResources();
+
+        startBtn.style.display = 'none';
+
+        camera.start();
+
+    };
+
+</script>
+
+</body>
+
+</html>
