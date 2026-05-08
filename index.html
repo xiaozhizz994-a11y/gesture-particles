@@ -31,11 +31,11 @@
 
 <video id="input_video" playsinline webkit-playsinline muted></video>
 <canvas id="canvas"></canvas>
-<button id="start_btn">开启交互体验</button>
+<button id="start_btn">点击进入体验</button>
 <div id="footer_text">都成视觉</div>
 
 <script>
-    /** --- 1. 变量与引擎配置 --- **/
+    /** --- 1. 全局配置与变量 --- **/
     let audioCtx, analyser, dataArray, bgmSource, audioBoost = 0;
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
@@ -45,6 +45,11 @@
     let width, height, particles = [];
     let dynamicFaceCoords = [];
     let faceLandmarker;
+
+    // 自动获取当前环境的基础路径 (修复 GitHub Pages 二级目录问题)
+    const getBasePath = () => {
+        return window.location.href.substring(0, window.location.href.lastIndexOf("/") + 1);
+    };
 
     function resize() {
         width = canvas.width = window.innerWidth;
@@ -60,19 +65,19 @@
     }
     window.addEventListener('resize', resize);
 
-    /** --- 2. 核心初始化函数 --- **/
+    /** --- 2. 核心初始化 --- **/
     async function initFaceLandmarker() {
-        // 使用 window.mediapipe 命名空间获取解析器
         const vision = await window.mediapipe.tasksVision.FilesetResolver.forVisionTasks(
             "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
         );
         
-        // 动态计算模型的绝对路径，防止 GitHub Pages 路径错乱
-        const modelPath = window.location.origin + window.location.pathname.replace(/[^/]*$/, '') + "face_landmarker.task";
+        // 关键修复：使用基础路径拼接，并增加版本号强制绕过 CDN 缓存
+        const modelUrl = `${getBasePath()}face_landmarker.task?v=${Date.now()}`;
+        console.log("模型尝试路径:", modelUrl);
 
         faceLandmarker = await window.mediapipe.tasksVision.FaceLandmarker.createFromOptions(vision, {
             baseOptions: {
-                modelAssetPath: modelPath, 
+                modelAssetPath: modelUrl, 
                 delegate: "GPU"
             },
             runningMode: "VIDEO",
@@ -83,6 +88,7 @@
     async function initAudio() {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         const res = await fetch('music.MP3');
+        if (!res.ok) throw new Error("音频加载失败");
         const buffer = await audioCtx.decodeAudioData(await res.arrayBuffer());
         bgmSource = audioCtx.createBufferSource();
         bgmSource.buffer = buffer;
@@ -94,7 +100,7 @@
         bgmSource.start(0);
     }
 
-    /** --- 3. 循环逻辑 --- **/
+    /** --- 3. 动画与预测 --- **/
     function animate() {
         if (analyser) {
             analyser.getByteFrequencyData(dataArray);
@@ -103,20 +109,20 @@
             audioBoost = sum / dataArray.length / 255;
         }
         
-        ctx.fillStyle = `rgba(0, 0, 0, 0.2)`;
+        ctx.fillStyle = `rgba(0, 0, 0, 0.23)`;
         ctx.fillRect(0, 0, width, height);
 
         particles.forEach(p => {
             if (dynamicFaceCoords.length > 0) {
                 const target = dynamicFaceCoords[p.id % dynamicFaceCoords.length];
-                p.x += (target.x - p.x) * (0.07 + audioBoost * 0.12);
-                p.y += (target.y - p.y) * (0.07 + audioBoost * 0.12);
+                p.x += (target.x - p.x) * (0.08 + audioBoost * 0.12);
+                p.y += (target.y - p.y) * (0.08 + audioBoost * 0.12);
             } else {
-                p.x += Math.sin(Date.now() * 0.001 + p.id) * 0.5;
-                p.y += Math.cos(Date.now() * 0.001 + p.id) * 0.5;
+                p.x += Math.sin(Date.now() * 0.001 + p.id) * 0.4;
+                p.y += Math.cos(Date.now() * 0.001 + p.id) * 0.4;
             }
-            ctx.fillStyle = `hsla(${190 + audioBoost * 100}, 100%, 75%, 0.8)`;
-            const s = p.size * (1 + audioBoost * 2.5);
+            ctx.fillStyle = `hsla(${190 + audioBoost * 110}, 100%, 75%, 0.8)`;
+            const s = p.size * (1 + audioBoost * 2.8);
             ctx.fillRect(p.x, p.y, s, s);
         });
         requestAnimationFrame(animate);
@@ -124,43 +130,4 @@
 
     function predict() {
         if (faceLandmarker && videoElement.readyState >= 2) {
-            const results = faceLandmarker.detectForVideo(videoElement, performance.now());
-            if (results.faceLandmarks && results.faceLandmarks[0]) {
-                dynamicFaceCoords = results.faceLandmarks[0].map(m => ({
-                    x: (1 - m.x) * width, y: m.y * height
-                }));
-            }
-        }
-        requestAnimationFrame(predict);
-    }
-
-    /** --- 4. 交互触发 --- **/
-    startBtn.onclick = async () => {
-        startBtn.innerText = "资源同步中...";
-        startBtn.style.pointerEvents = "none";
-        
-        try {
-            await initAudio();
-            await initFaceLandmarker();
-            
-            const camera = new Camera(videoElement, {
-                onFrame: async () => {},
-                width: 640, height: 480
-            });
-            await camera.start();
-            
-            startBtn.style.display = 'none';
-            predict();
-        } catch (e) {
-            console.error(e);
-            startBtn.innerText = "初始化失败，请检查摄像头";
-            startBtn.style.pointerEvents = "all";
-            alert("错误类型: " + e.name + "\n请务必在 Safari 中【手动授权】摄像头，并确认 GitHub 根目录已包含 face_landmarker.task 文件。");
-        }
-    };
-
-    resize();
-    animate();
-</script>
-</body>
-</html>
+            const results = faceLandmarker.detectFor
