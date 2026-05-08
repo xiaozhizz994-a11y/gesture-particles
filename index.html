@@ -3,8 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>都成视觉 - 面部粒子交互</title>
+    <title>都成视觉 - 性能优化版</title>
     
+    <script src="https://fastly.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm/vision_bundle.js"></script>
     <script src="https://fastly.jsdelivr.net/npm/@mediapipe/face_landmarker/face_landmarker.js"></script>
     <script src="https://fastly.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
@@ -13,7 +14,6 @@
         canvas { display: block; }
         #input_video { position: fixed; top: 0; left: 0; width: 1px; height: 1px; opacity: 0; }
         
-        /* 启动按钮样式 */
         #start_btn {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
             padding: 18px 45px; font-size: 18px; background: #0ff; border: none;
@@ -23,7 +23,6 @@
         }
         #start_btn:active { transform: translate(-50%, -50%) scale(0.95); }
 
-        /* 底部文字样式 */
         #footer_text {
             position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
             color: #ffffff; font-size: 24px; font-weight: 900; letter-spacing: 4px;
@@ -45,13 +44,13 @@
 <div id="footer_text">都成视觉</div>
 
 <script>
-    /** --- 1. 音频引擎 --- **/
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    /** --- 1. 音频引擎 (针对 Safari 优化) --- **/
+    let audioCtx;
     let analyser, dataArray, bgmSource;
     let audioBoost = 0;
-    const sfxBuffers = [];
 
-    async function loadAudioResources() {
+    async function initAudio() {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         try {
             const bgmRes = await fetch('music.MP3');
             const bgmBuffer = await audioCtx.decodeAudioData(await bgmRes.arrayBuffer());
@@ -64,24 +63,7 @@
             bgmSource.connect(analyser);
             analyser.connect(audioCtx.destination);
             bgmSource.start(0);
-        } catch (e) { console.error("BGM加载失败", e); }
-
-        for (let i = 0; i <= 4; i++) {
-            try {
-                const sfxRes = await fetch(`${i}.wav`);
-                const buffer = await audioCtx.decodeAudioData(await sfxRes.arrayBuffer());
-                sfxBuffers.push(buffer);
-            } catch (e) { console.warn(`音效 ${i}.wav 加载失败`); }
-        }
-    }
-
-    function playRandomSFX() {
-        if (sfxBuffers.length === 0) return;
-        const source = audioCtx.createBufferSource();
-        source.buffer = sfxBuffers[Math.floor(Math.random() * sfxBuffers.length)];
-        source.connect(analyser);
-        source.connect(audioCtx.destination);
-        source.start(0);
+        } catch (e) { console.warn("音频初始化跳过"); }
     }
 
     function updateAudioData() {
@@ -99,64 +81,60 @@
     const videoElement = document.getElementById('input_video');
 
     let width, height, particles = [];
-    let dynamicFaceCoords = []; // 用于存储动态生成的面部粒子目标位置
+    let dynamicFaceCoords = [];
 
     function resize() {
         width = canvas.width = window.innerWidth;
         height = canvas.height = window.innerHeight;
-        // 初始状态生成一些乱序粒子，防止开始时黑屏
-        if (particles.length === 0) initParticles(468); // 468 是 MediaPipe 默认的面部关键点数量
+        if (particles.length === 0) initParticles(468);
     }
     window.addEventListener('resize', resize);
-
-    function initParticles(count) {
-        particles = [];
-        for (let i = 0; i < count; i++) {
-            particles.push(new Particle(i));
-        }
-    }
 
     class Particle {
         constructor(id) {
             this.id = id;
             this.x = Math.random() * width;
             this.y = Math.random() * height;
-            this.vx = 0; this.vy = 0;
-            this.baseSize = Math.random() * 1.5 + 1.0;
-            // 粒子颜色随节奏动态微调
+            this.vx = (Math.random() - 0.5) * 2; 
+            this.vy = (Math.random() - 0.5) * 2;
+            this.baseSize = Math.random() * 1.5 + 1.2;
             this.color = `hsla(${190 + Math.random() * 30}, 100%, 75%, ${Math.random() * 0.5 + 0.5})`;
         }
 
         update() {
-            // 阻尼和节奏跳动动力
             this.x += this.vx; this.y += this.vy;
-            this.vx *= 0.94; this.vy *= 0.94;
+            this.vx *= 0.95; this.vy *= 0.95;
 
-            // 只有当有动态面部数据时才汇聚成形状
             if (dynamicFaceCoords.length > 0) {
-                // 将粒子均匀映射到动态关键点上
                 const target = dynamicFaceCoords[this.id % dynamicFaceCoords.length];
-                
-                // 核心动力学：汇聚力随音频节奏跳动
-                const speedFactor = 0.08 + audioBoost * 0.1;
-                
+                const speedFactor = 0.07 + audioBoost * 0.12;
                 this.x += (target.x - this.x) * speedFactor;
                 this.y += (target.y - this.y) * speedFactor;
             }
         }
 
         draw() {
+            // 重音时增加发光感
+            if (audioBoost > 0.4) {
+                ctx.shadowBlur = 10 * audioBoost;
+                ctx.shadowColor = this.color;
+            } else {
+                ctx.shadowBlur = 0;
+            }
             ctx.fillStyle = this.color;
-            // 粒子大小随节奏跳动
-            const s = this.baseSize * (1 + audioBoost * 3);
+            const s = this.baseSize * (1 + audioBoost * 2.5);
             ctx.fillRect(this.x, this.y, s, s);
         }
     }
 
+    function initParticles(count) {
+        particles = [];
+        for (let i = 0; i < count; i++) particles.push(new Particle(i));
+    }
+
     function animate() {
         updateAudioData();
-        // 背景残留效果随节奏跳动，增强通感体验
-        ctx.fillStyle = `rgba(0, 0, 0, ${0.16 - audioBoost * 0.08})`;
+        ctx.fillStyle = `rgba(0, 0, 0, ${0.18 - audioBoost * 0.08})`;
         ctx.fillRect(0, 0, width, height);
         particles.forEach(p => { p.update(); p.draw(); });
         requestAnimationFrame(animate);
@@ -164,56 +142,41 @@
 
     /** --- 3. 面部追踪与交互 --- **/
     let faceLandmarker;
-    let runningMode = "IMAGE";
+    const { FaceLandmarker, FilesetResolver } = mediapipe;
 
-    // 初始化 Face Landmarker
     async function initFaceLandmarker() {
         const filesetResolver = await FilesetResolver.forVisionTasks(
             "https://fastly.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
         );
         faceLandmarker = await FaceLandmarker.createFromOptions(filesetResolver, {
             baseOptions: {
+                // 如果仍然极慢，请将此文件下载并改写为本地路径 'face_landmarker.task'
                 modelAssetPath: `https://fastly.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/face_landmarker.task`,
                 delegate: "GPU"
             },
-            outputFaceBlendshapes: false,
-            runningMode: runningMode,
-            numFaces: 1 // 只追踪一张脸以保证性能
+            runningMode: "VIDEO",
+            numFaces: 1
         });
-        runningMode = "VIDEO";
     }
 
-    // 绘制并采样面部关键点
     function predictWebcam() {
+        if (!faceLandmarker) return;
         let startTimeMs = performance.now();
-        if (runningMode === "IMAGE") {
-            predictWebcam();
-            return;
-        }
-
-        // 检测面部
         const results = faceLandmarker.detectForVideo(videoElement, startTimeMs);
-
-        // 清空之前的目标位置
+        
         dynamicFaceCoords = [];
-
         if (results.faceLandmarks && results.faceLandmarks.length > 0) {
             const marks = results.faceLandmarks[0];
-            
-            // 采样 MediaPipe 的 468 个默认面部关键点，并进行坐标系平滑处理
             dynamicFaceCoords = marks.map(m => ({
-                x: (1 - m.x) * width, // 坐标镜像平滑，防止操作和现实反向
+                x: (1 - m.x) * width,
                 y: m.y * height
             }));
         }
-
-        if (runningMode === "VIDEO") {
-            window.requestAnimationFrame(predictWebcam);
-        }
+        window.requestAnimationFrame(predictWebcam);
     }
 
     const camera = new Camera(videoElement, {
-        onFrame: async () => {}, // 关键改动：不需要每个 frame 都调用 detect，在主循环里调
+        onFrame: async () => {}, 
         width: 640, height: 480
     });
 
@@ -221,13 +184,29 @@
     animate();
 
     startBtn.onclick = async () => {
-        startBtn.innerText = "资源唤醒中...";
-        if (audioCtx.state === 'suspended') await audioCtx.resume();
-        await loadAudioResources();
-        await initFaceLandmarker(); // 唤醒模型
-        predictWebcam(); // 开启检测循环
-        startBtn.style.display = 'none';
-        camera.start();
+        startBtn.innerText = "正在链接面部维度...";
+        startBtn.style.pointerEvents = "none";
+        
+        // 瞬间激活音频
+        await initAudio();
+        if (audioCtx && audioCtx.state === 'suspended') await audioCtx.resume();
+        
+        // 让粒子先动起来，不让用户觉得死机
+        particles.forEach(p => {
+            p.vx = (Math.random() - 0.5) * 30;
+            p.vy = (Math.random() - 0.5) * 30;
+        });
+
+        try {
+            await initFaceLandmarker();
+            startBtn.style.display = 'none';
+            camera.start();
+            predictWebcam();
+        } catch (e) {
+            startBtn.innerText = "环境初始化失败，请重试";
+            startBtn.style.pointerEvents = "all";
+            console.error(e);
+        }
     };
 </script>
 
