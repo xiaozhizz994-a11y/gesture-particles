@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>都成视觉 - 性能优化版</title>
+    <title>都成视觉 - 最终稳定版</title>
     
     <script src="https://fastly.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm/vision_bundle.js"></script>
     <script src="https://fastly.jsdelivr.net/npm/@mediapipe/face_landmarker/face_landmarker.js"></script>
@@ -12,7 +12,7 @@
     <style>
         body { margin: 0; overflow: hidden; background: #000; touch-action: none; font-family: "PingFang SC", "Microsoft YaHei", sans-serif; }
         canvas { display: block; }
-        #input_video { position: fixed; top: 0; left: 0; width: 1px; height: 1px; opacity: 0; }
+        #input_video { position: fixed; top: 0; left: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
         
         #start_btn {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
@@ -44,7 +44,7 @@
 <div id="footer_text">都成视觉</div>
 
 <script>
-    /** --- 1. 音频引擎 (针对 Safari 优化) --- **/
+    /** --- 1. 音频引擎 --- **/
     let audioCtx;
     let analyser, dataArray, bgmSource;
     let audioBoost = 0;
@@ -114,7 +114,6 @@
         }
 
         draw() {
-            // 重音时增加发光感
             if (audioBoost > 0.4) {
                 ctx.shadowBlur = 10 * audioBoost;
                 ctx.shadowColor = this.color;
@@ -140,18 +139,23 @@
         requestAnimationFrame(animate);
     }
 
-    /** --- 3. 面部追踪与交互 --- **/
+    /** --- 3. 面部追踪 --- **/
     let faceLandmarker;
-    const { FaceLandmarker, FilesetResolver } = mediapipe;
 
     async function initFaceLandmarker() {
+        // 使用 mediapipe 命名空间获取解析器
+        const mpVision = window.mediapipe ? window.mediapipe.tasksVision : null;
+        const FilesetResolver = window.FilesetResolver || (mpVision ? mpVision.FilesetResolver : null);
+        const FaceLandmarker = window.FaceLandmarker || (mpVision ? mpVision.FaceLandmarker : null);
+
         const filesetResolver = await FilesetResolver.forVisionTasks(
             "https://fastly.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
         );
+        
         faceLandmarker = await FaceLandmarker.createFromOptions(filesetResolver, {
             baseOptions: {
-                // 如果仍然极慢，请将此文件下载并改写为本地路径 'face_landmarker.task'
-                modelAssetPath: `https://fastly.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/face_landmarker.task`,
+                // 已修改为本地文件路径
+                modelAssetPath: "face_landmarker.task", 
                 delegate: "GPU"
             },
             runningMode: "VIDEO",
@@ -160,7 +164,10 @@
     }
 
     function predictWebcam() {
-        if (!faceLandmarker) return;
+        if (!faceLandmarker || videoElement.readyState < 2) {
+            window.requestAnimationFrame(predictWebcam);
+            return;
+        }
         let startTimeMs = performance.now();
         const results = faceLandmarker.detectForVideo(videoElement, startTimeMs);
         
@@ -184,17 +191,16 @@
     animate();
 
     startBtn.onclick = async () => {
-        startBtn.innerText = "正在链接面部维度...";
+        startBtn.innerText = "资源同步中...";
         startBtn.style.pointerEvents = "none";
         
-        // 瞬间激活音频
         await initAudio();
         if (audioCtx && audioCtx.state === 'suspended') await audioCtx.resume();
         
-        // 让粒子先动起来，不让用户觉得死机
+        // 瞬间粒子散开动画
         particles.forEach(p => {
-            p.vx = (Math.random() - 0.5) * 30;
-            p.vy = (Math.random() - 0.5) * 30;
+            p.vx = (Math.random() - 0.5) * 40;
+            p.vy = (Math.random() - 0.5) * 40;
         });
 
         try {
@@ -203,7 +209,7 @@
             camera.start();
             predictWebcam();
         } catch (e) {
-            startBtn.innerText = "环境初始化失败，请重试";
+            startBtn.innerText = "初始化失败，请在 Safari 打开";
             startBtn.style.pointerEvents = "all";
             console.error(e);
         }
