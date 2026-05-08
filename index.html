@@ -35,7 +35,6 @@
 <div id="footer_text">都成视觉</div>
 
 <script>
-    /** --- 1. 全局配置与变量 --- **/
     let audioCtx, analyser, dataArray, bgmSource, audioBoost = 0;
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
@@ -46,9 +45,12 @@
     let dynamicFaceCoords = [];
     let faceLandmarker;
 
-    // 自动获取当前环境的基础路径 (修复 GitHub Pages 二级目录问题)
-    const getBasePath = () => {
-        return window.location.href.substring(0, window.location.href.lastIndexOf("/") + 1);
+    // 获取当前网页的绝对根路径，解决 GitHub Pages 的路径偏移
+    const getAbsoluteModelPath = () => {
+        const loc = window.location;
+        const root = loc.protocol + '//' + loc.host + loc.pathname.replace(/\/[^\/]*$/, '/');
+        // 添加随机数 v=${Date.now()} 强制浏览器跳过缓存读取最新上传的文件
+        return `${root}face_landmarker.task?v=${Date.now()}`;
     };
 
     function resize() {
@@ -65,30 +67,33 @@
     }
     window.addEventListener('resize', resize);
 
-    /** --- 2. 核心初始化 --- **/
     async function initFaceLandmarker() {
-        const vision = await window.mediapipe.tasksVision.FilesetResolver.forVisionTasks(
-            "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
-        );
-        
-        // 关键修复：使用基础路径拼接，并增加版本号强制绕过 CDN 缓存
-        const modelUrl = `${getBasePath()}face_landmarker.task?v=${Date.now()}`;
-        console.log("模型尝试路径:", modelUrl);
+        try {
+            const vision = await window.mediapipe.tasksVision.FilesetResolver.forVisionTasks(
+                "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+            );
+            
+            const modelUrl = getAbsoluteModelPath();
+            console.log("正在尝试加载模型:", modelUrl);
 
-        faceLandmarker = await window.mediapipe.tasksVision.FaceLandmarker.createFromOptions(vision, {
-            baseOptions: {
-                modelAssetPath: modelUrl, 
-                delegate: "GPU"
-            },
-            runningMode: "VIDEO",
-            numFaces: 1
-        });
+            faceLandmarker = await window.mediapipe.tasksVision.FaceLandmarker.createFromOptions(vision, {
+                baseOptions: {
+                    modelAssetPath: modelUrl, 
+                    delegate: "GPU"
+                },
+                runningMode: "VIDEO",
+                numFaces: 1
+            });
+        } catch (err) {
+            console.error("模型初始化深度报错:", err);
+            throw err;
+        }
     }
 
     async function initAudio() {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         const res = await fetch('music.MP3');
-        if (!res.ok) throw new Error("音频加载失败");
+        if (!res.ok) throw new Error("音乐文件加载失败，请检查文件名大小写");
         const buffer = await audioCtx.decodeAudioData(await res.arrayBuffer());
         bgmSource = audioCtx.createBufferSource();
         bgmSource.buffer = buffer;
@@ -100,7 +105,6 @@
         bgmSource.start(0);
     }
 
-    /** --- 3. 动画与预测 --- **/
     function animate() {
         if (analyser) {
             analyser.getByteFrequencyData(dataArray);
@@ -130,4 +134,44 @@
 
     function predict() {
         if (faceLandmarker && videoElement.readyState >= 2) {
-            const results = faceLandmarker.detectFor
+            const results = faceLandmarker.detectForVideo(videoElement, performance.now());
+            if (results.faceLandmarks && results.faceLandmarks[0]) {
+                dynamicFaceCoords = results.faceLandmarks[0].map(m => ({
+                    x: (1 - m.x) * width, y: m.y * height
+                }));
+            }
+        }
+        requestAnimationFrame(predict);
+    }
+
+    startBtn.onclick = async () => {
+        startBtn.innerText = "资源唤醒中...";
+        startBtn.style.pointerEvents = "none";
+        
+        try {
+            await initAudio();
+            await initFaceLandmarker();
+            
+            // 明确指定使用前置摄像头
+            const camera = new Camera(videoElement, {
+                onFrame: async () => {},
+                width: 640, height: 480,
+                facingMode: 'user'
+            });
+            await camera.start();
+            
+            startBtn.style.display = 'none';
+            predict();
+        } catch (e) {
+            console.error(e);
+            alert(`初始化详情报错:\n${e.name}: ${e.message}\n\n排查建议：\n1. 确保在 Safari 浏览器中打开\n2. 确认 GitHub 根目录存在 face_landmarker.task\n3. 确认已允许摄像头权限`);
+            startBtn.innerText = "点击重试";
+            startBtn.style.pointerEvents = "all";
+        }
+    };
+
+    resize();
+    animate();
+</script>
+</body>
+</html>
