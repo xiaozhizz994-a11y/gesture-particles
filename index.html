@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>都成视觉 - 稳定交付版</title>
     
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm/vision_bundle.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_landmarker/face_landmarker.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm/vision_bundle.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_landmarker/face_landmarker.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
 
     <style>
         body { margin: 0; overflow: hidden; background: #000; touch-action: none; font-family: sans-serif; }
@@ -46,10 +46,11 @@
     let dynamicFaceCoords = [];
     let faceLandmarker;
 
-    // 获取绝对路径，解决 GitHub Pages 的子目录路径问题
+    // 获取模型绝对路径，带上随机后缀彻底解决缓存
     const getModelUrl = () => {
-        const baseUrl = window.location.href.substring(0, window.location.href.lastIndexOf("/") + 1);
-        return `${baseUrl}face_landmarker.task?t=${Date.now()}`; // 加时间戳强制刷新缓存
+        const baseUrl = window.location.href.split('?')[0].split('#')[0];
+        const dir = baseUrl.substring(0, baseUrl.lastIndexOf("/") + 1);
+        return `${dir}face_landmarker.task?v=${Date.now()}`;
     };
 
     function resize() {
@@ -59,7 +60,7 @@
             for (let i = 0; i < 468; i++) {
                 particles.push({
                     id: i, x: Math.random() * width, y: Math.random() * height,
-                    vx: 0, vy: 0, size: Math.random() * 2 + 1
+                    size: Math.random() * 2 + 1
                 });
             }
         }
@@ -68,14 +69,18 @@
 
     /** --- 2. 核心初始化 --- **/
     async function initFaceLandmarker() {
+        // 确保 window.mediapipe 已被脚本加载
+        if (!window.mediapipe || !window.mediapipe.tasksVision) {
+            throw new Error("MediaPipe 库尚未加载完成，请刷新页面重试。");
+        }
+
         const vision = await window.mediapipe.tasksVision.FilesetResolver.forVisionTasks(
             "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
         );
         
         const modelPath = getModelUrl();
-        console.log("正在加载模型自:", modelPath);
+        console.log("模型加载路径:", modelPath);
 
-        // 重新构建实例，确保方法被正确绑定
         faceLandmarker = await window.mediapipe.tasksVision.FaceLandmarker.createFromOptions(vision, {
             baseOptions: {
                 modelAssetPath: modelPath, 
@@ -85,16 +90,16 @@
             numFaces: 1
         });
 
-        // 验证实例是否包含关键方法
+        // 二次确认关键方法是否存在
         if (!faceLandmarker || typeof faceLandmarker.detectForVideo !== 'function') {
-            throw new Error("模型方法绑定失败，请检查模型文件是否完整。");
+            throw new Error("模型初始化异常：方法未绑定。请确认 face_landmarker.task 文件名完全正确且未损坏。");
         }
     }
 
     async function initAudio() {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         const res = await fetch('music.MP3');
-        if (!res.ok) throw new Error("音乐文件丢失");
+        if (!res.ok) throw new Error("音频资源加载失败，请检查 music.MP3 是否在根目录。");
         const buffer = await audioCtx.decodeAudioData(await res.arrayBuffer());
         bgmSource = audioCtx.createBufferSource();
         bgmSource.buffer = buffer;
@@ -111,8 +116,8 @@
         if (analyser) {
             analyser.getByteFrequencyData(dataArray);
             let sum = 0;
-            for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
-            audioBoost = sum / dataArray.length / 255;
+            for (let i = 0; i < 128; i++) sum += dataArray[i]; // 取低频部分更有节奏感
+            audioBoost = sum / 128 / 255;
         }
         
         ctx.fillStyle = `rgba(0, 0, 0, 0.23)`;
@@ -135,8 +140,7 @@
     }
 
     function predict() {
-        // 增加安全检测，防止未初始化调用
-        if (faceLandmarker && faceLandmarker.detectForVideo && videoElement.readyState >= 2) {
+        if (faceLandmarker && videoElement.readyState >= 2) {
             try {
                 const results = faceLandmarker.detectForVideo(videoElement, performance.now());
                 if (results.faceLandmarks && results.faceLandmarks[0]) {
@@ -145,21 +149,23 @@
                     }));
                 }
             } catch (e) {
-                console.error("检测帧错误:", e);
+                console.error("帧处理失败:", e);
             }
         }
         requestAnimationFrame(predict);
     }
 
-    /** --- 4. 交互触发 --- **/
+    /** --- 4. 启动按钮逻辑 --- **/
     startBtn.onclick = async () => {
-        startBtn.innerText = "资源同步中...";
+        startBtn.innerText = "系统唤醒中...";
         startBtn.style.pointerEvents = "none";
         
         try {
+            // 先尝试初始化音频和视觉
             await initAudio();
             await initFaceLandmarker();
             
+            // 初始化相机
             const camera = new Camera(videoElement, {
                 onFrame: async () => {},
                 width: 640, height: 480
@@ -169,9 +175,9 @@
             startBtn.style.display = 'none';
             predict();
         } catch (e) {
-            console.error("初始化错误详情:", e);
-            alert(`初始化失败：\n${e.message}\n\n建议：\n1. 强制在 Safari 浏览器打开\n2. 设置 -> Safari -> 清除历史记录与网站数据\n3. 检查 GitHub 仓库 face_landmarker.task 文件大小是否正确`);
-            startBtn.innerText = "点击重试";
+            console.error(e);
+            alert(`初始化失败：\n${e.message}\n\n排查建议：\n1. 检查 GitHub 上文件名是否为 face_landmarker.task (无后缀)\n2. 确保在 Safari 打开而非微信内。`);
+            startBtn.innerText = "重新尝试";
             startBtn.style.pointerEvents = "all";
         }
     };
