@@ -5,9 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>都成视觉 - 稳定交付版</title>
     
-    <!-- 使用正确的 CDN 路径，兼容新版 Tasks Vision API -->
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm/vision_wasm_internal.js" 
-            crossorigin="anonymous"></script>
+    <!-- 关键修改：使用你自己网站上的 vision_wasm_internal.js，不再依赖 CDN -->
+    <script src="vision_wasm_internal.js"></script>
 
     <style>
         body { margin: 0; overflow: hidden; background: #000; touch-action: none; font-family: sans-serif; }
@@ -60,21 +59,22 @@
     }
     window.addEventListener('resize', resize);
 
-    /** --- 2. 核心初始化（使用在线模型，无需本地文件） --- **/
+    /** --- 2. 核心初始化（全部改成本地路径） --- **/
     async function initFaceLandmarker() {
         try {
             console.log("开始加载 FilesetResolver...");
             if (typeof FilesetResolver === 'undefined' || typeof FaceLandmarker === 'undefined') {
-                throw new Error("MediaPipe 库尚未加载完成，请检查网络或 CDN 链接。");
+                throw new Error("MediaPipe 库尚未加载完成，请检查 vision_wasm_internal.js 是否已正确放置在网页同目录下。");
             }
 
+            // 指定本地 WASM 文件的路径（和当前页面同目录）
             const vision = await FilesetResolver.forVisionTasks(
-                "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm"
+                window.location.origin + window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/')) + "/"
             );
             
             console.log("准备加载模型（在线）...");
 
-            // 直接使用官方在线链接，无需本地 face_landmarker.task
+            // 仍然使用 Google 官方模型链接（这个不受影响，并且体积小）
             faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
                 baseOptions: {
                     modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task",
